@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard de Tráfego de Servidor</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-content">
+        <h1 id="main-title">Dashboard de Tráfego do Servidor</h1>
+        <p id="subtitle">Visão Geral - Tráfego por Cliente (IP)</p>
+        <p id="chart-legend"><strong>Entrada</strong>: dados recebidos | <strong>Saída</strong>: dados enviados</p>
+      </div>
+      <div class="theme-switcher">
+        <label for="theme-toggle" class="theme-label">
+          🌞
+          <div class="toggle-wrapper">
+            <input type="checkbox" id="theme-toggle" />
+            <span class="slider"></span>
+          </div>
+          🌙
+        </label>
+      </div>
+    </header>
+
+    <div style="font-size: 0.9em; margin-bottom: 10px; color: var(--secondary-text);">
+      <span id="breadcrumb">📊 Visão Geral</span>
+    </div>
+
+    <main>
+      <div class="chart-container">
+        <canvas id="traffic-chart"></canvas>
+      </div>
+      <div style="text-align: center; margin-top: 20px;">
+        <button id="back-button" class="hidden">← Voltar para Visão Geral</button>
+      </div>
+      <p id="last-update"></p>
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
