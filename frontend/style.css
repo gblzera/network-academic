@@ -217,3 +217,31 @@ header {
   .chart-container { height: 50vh; }
   .footer-controls { flex-direction: column; gap: 15px; }
 }
+
+time-range-selector {
+  display: flex;
+  background-color: var(--border-color);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.time-btn {
+  background-color: transparent;
+  border: none;
+  color: var(--secondary-text);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-family: var(--font-family);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.time-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.time-btn.active {
+  background-color: var(--accent-color);
+  color: white;
+}

@@ -9,13 +9,15 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script src="https://cdn.jsdelivr.net/npm/date-fns"></script>
   <script src="https://cdn.jsdelivr.net/npm/ua-parser-js/dist/ua-parser.min.js"></script>
 </head>
 <body>
   <div class="container">
     <header>
       <div class="header-content">
-        <h1 id="main-title">Server Traffic Monitor</h1>
+        <h1 id="main-title">Monitor de Tráfego (Server)</h1>
         <p id="subtitle">Visão Geral - Tráfego por Cliente (IP)</p>
       </div>
       <div class="header-controls">
@@ -23,6 +25,14 @@
           <span class="status-dot"></span>
           <span class="status-text">Conectando...</span>
         </div>
+        
+        <div class="time-range-selector">
+          <button class="time-btn active" data-range="live">Ao Vivo</button>
+          <button class="time-btn" data-range="15m">15 Min</button>
+          <button class="time-btn" data-range="1h">1 Hora</button>
+          <button class="time-btn" data-range="6h">6 Horas</button>
+        </div>
+
         <div class="theme-switcher">
           <label for="theme-toggle" class="theme-label">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>

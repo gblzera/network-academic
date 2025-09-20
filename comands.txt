@@ -1,0 +1,5 @@
+uvicorn app:app --host 0.0.0.0 --port 8000
+sudo python3 capture.py
+python3 -m server 8080
+
+terminal do server = reodar * ip a * para ver o IP da VM na rede local... adaptar esse IP dentro dos codigos

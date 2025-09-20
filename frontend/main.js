@@ -2,6 +2,7 @@
 const VM_IP = "192.168.0.140";
 // --- FIM DA CONFIGURAÇÃO ---
 
+const API_URL = `http://${VM_IP}:8000`;
 const WS_URL = `ws://${VM_IP}:8000/ws`;
 
 // Seletores de Elementos
@@ -14,13 +15,15 @@ const activeClientsEl = document.getElementById('active-clients');
 const totalInboundEl = document.getElementById('total-inbound');
 const totalOutboundEl = document.getElementById('total-outbound');
 const lastUpdateEl = document.getElementById('last-update');
+const timeRangeButtons = document.querySelectorAll('.time-btn');
 
 // Estado da Aplicação
 let trafficChart;
 let currentTrafficData = {};
-let currentView = 'overview';
+let currentView = 'live'; // 'live', 'history', 'drilldown'
 let selectedIp = null;
 let currentIpList = [];
+let socket; // Tornar o socket global para gerenciá-lo
 let inboundGradient, outboundGradient;
 
 // Funções Utilitárias
@@ -32,55 +35,58 @@ const formatBytes = (bytes) => {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
-// Funções do Chart
+// Paleta de cores para o gráfico de linha do histórico
+const colorPalette = ['#38bdf8', '#fb7185', '#4ade80', '#facc15', '#a78bfa', '#2dd4bf', '#f472b6'];
+let colorIndex = 0;
+const getColor = () => {
+    const color = colorPalette[colorIndex % colorPalette.length];
+    colorIndex++;
+    return color;
+};
+
+// Funções de Renderização do Gráfico
 const initializeChart = () => {
     trafficChart = new Chart(chartCanvas, {
-        type: 'bar',
+        type: 'bar', // Começa como barras
         data: { labels: [], datasets: [] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: { callback: (value) => formatBytes(value), color: '#94a3b8' },
-                    title: { display: true, text: 'Volume de Tráfego', color: '#94a3b8' },
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                },
-                x: {
-                    ticks: { color: '#94a3b8' },
-                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                }
-            },
-            plugins: {
-                legend: { position: 'top', labels: { color: '#e2e8f0' } },
-                tooltip: {
-                    backgroundColor: 'rgba(15, 23, 42, 0.8)',
-                    titleFont: { size: 14, weight: 'bold' },
-                    bodyFont: { size: 12 },
-                    callbacks: {
-                        label: (context) => `${context.dataset.label}: ${formatBytes(context.parsed.y)}`
-                    }
-                }
-            },
+            scales: { y: { beginAtZero: true } },
             onClick: (event, elements) => {
-                if (currentView === 'overview' && elements.length > 0) {
+                if ((currentView === 'live' || currentView === 'history_overview') && elements.length > 0) {
                     const rawIp = currentIpList[elements[0].index];
-                    if (rawIp) handleDrillDown(rawIp);
+                    if (rawIp) switchView('drilldown', rawIp);
                 }
             }
         }
     });
 };
 
-const updateChart = () => {
-    if (!trafficChart || !currentTrafficData.traffic) return;
+const renderLiveChart = (data) => {
+    if (!trafficChart || !data.traffic) return;
 
-    const traffic = currentTrafficData.traffic;
-    const hosts = currentTrafficData.hosts || {};
+    const traffic = data.traffic;
+    const hosts = data.hosts || {};
+    const vendors = data.vendors || {};
 
-    // Cria os gradientes para as barras
+    const sortedIps = Object.keys(traffic).sort((a, b) => {
+        const sum = ip => Object.values(traffic[ip]).reduce((acc, s) => acc + (s.in || 0) + (s.out || 0), 0);
+        return sum(b) - sum(a);
+    });
+
+    currentIpList = sortedIps;
+    const labels = sortedIps.map(ip => {
+        const hostname = hosts[ip];
+        const vendor = vendors[ip];
+        const displayName = (hostname && hostname !== ip) ? hostname : ip;
+        return vendor && vendor !== "Desconhecido" ? `${displayName} (${vendor})` : displayName;
+    });
+
+    const inboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, s) => sum + (s.in || 0), 0));
+    const outboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, s) => sum + (s.out || 0), 0));
+    
     inboundGradient = chartCanvas.createLinearGradient(0, 0, 0, 400);
     inboundGradient.addColorStop(0, 'rgba(56, 189, 248, 0.8)');
     inboundGradient.addColorStop(1, 'rgba(56, 189, 248, 0.2)');
@@ -89,88 +95,143 @@ const updateChart = () => {
     outboundGradient.addColorStop(0, 'rgba(239, 68, 68, 0.8)');
     outboundGradient.addColorStop(1, 'rgba(239, 68, 68, 0.2)');
 
-    if (currentView === 'overview') {
-        const sortedIps = Object.keys(traffic).sort((a, b) => {
-            const sum = ip => Object.values(traffic[ip]).reduce((acc, proto) => acc + (proto.in || 0) + (proto.out || 0), 0);
-            return sum(b) - sum(a);
-        });
+    trafficChart.data.labels = labels;
+    trafficChart.data.datasets = [
+        { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
+        { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
+    ];
 
-        currentIpList = sortedIps;
-        const labels = sortedIps.map(ip => {
-            const hostname = hosts[ip];
-            return (hostname && hostname !== ip) ? `${hostname} (${ip})` : ip;
-        });
-
-        const inboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.in || 0), 0));
-        const outboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.out || 0), 0));
-
-        trafficChart.data.labels = labels;
-        trafficChart.data.datasets = [
-            { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
-            { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
-        ];
-    } else if (currentView === 'drilldown' && selectedIp) {
-        const protocols = Object.keys(traffic[selectedIp] || {}).sort();
-        const inboundData = protocols.map(proto => traffic[selectedIp][proto].in || 0);
-        const outboundData = protocols.map(proto => traffic[selectedIp][proto].out || 0);
-
-        trafficChart.data.labels = protocols;
-        trafficChart.data.datasets = [
-            { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
-            { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
-        ];
-    }
-
+    trafficChart.config.type = 'bar';
+    trafficChart.options.scales.x = { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.1)' }};
     updateThemeColors();
     trafficChart.update();
 };
 
-const handleDrillDown = (ip) => {
-    currentView = 'drilldown';
-    selectedIp = ip;
-    const hosts = currentTrafficData.hosts || {};
-    const displayName = hosts[ip] && hosts[ip] !== ip ? `${hosts[ip]} (${ip})` : ip;
-    subtitle.textContent = `Análise Detalhada por Protocolo - ${displayName}`;
-    backButton.classList.remove('hidden');
-    updateChart();
+const renderDrillDownChart = () => {
+    const traffic = currentTrafficData.traffic[selectedIp] || {};
+    // AQUI A MUDANÇA: Usa os nomes dos serviços vindos do backend
+    const services = Object.keys(traffic).sort();
+
+    const inboundData = services.map(service => traffic[service].in || 0);
+    const outboundData = services.map(service => traffic[service].out || 0);
+
+    trafficChart.config.type = 'bar';
+    trafficChart.data.labels = services;
+    trafficChart.data.datasets = [
+        { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
+        { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
+    ];
+    updateThemeColors();
+    trafficChart.update();
 };
 
-const handleDrillUp = () => {
-    currentView = 'overview';
-    selectedIp = null;
-    subtitle.textContent = 'Visão Geral - Tráfego por Cliente (IP)';
+const renderHistoryChart = (data) => {
+    if (!trafficChart) return;
+    colorIndex = 0;
+    
+    trafficChart.config.type = 'line';
+    
+    const datasets = Object.keys(data).map(ip => {
+        const color = getColor();
+        const points = data[ip].map(point => ({ x: new Date(point.time + 'Z'), y: point.total }));
+        return {
+            label: ip, data: points, fill: false, borderColor: color,
+            tension: 0.1, pointBackgroundColor: color, pointRadius: 3
+        };
+    });
+
+    trafficChart.options.scales.x = {
+        type: 'time',
+        time: { unit: 'minute', tooltipFormat: 'dd/MM/yyyy HH:mm' },
+        title: { display: true, text: 'Tempo' },
+        ticks: { color: '#94a3b8' },
+        grid: { color: 'rgba(255, 255, 255, 0.1)' }
+    };
+
+    trafficChart.data.labels = null;
+    trafficChart.data.datasets = datasets;
+    updateThemeColors();
+    trafficChart.update();
+};
+
+// Gerenciador de Visualização
+const switchView = (view, param = null) => {
+    currentView = view;
     backButton.classList.add('hidden');
-    updateChart();
+
+    if (view === 'live') {
+        subtitle.textContent = 'Visão Geral - Tráfego por Cliente (IP)';
+        if (!socket || socket.readyState === WebSocket.CLOSED) connectWebSocket();
+        renderLiveChart(currentTrafficData);
+    } 
+    else if (view === 'history') {
+        const rangeText = { '15m': '15 Minutos', '1h': '1 Hora', '6h': '6 Horas' }[param];
+        subtitle.textContent = `Histórico de Tráfego - Últimos ${rangeText}`;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.close();
+            setConnectionStatus('disconnected');
+        }
+        fetchHistory(param);
+    } 
+    else if (view === 'drilldown') {
+        selectedIp = param;
+        const hosts = currentTrafficData.hosts || {};
+        const vendors = currentTrafficData.vendors || {};
+        const vendorInfo = vendors[selectedIp] && vendors[selectedIp] !== "Desconhecido" ? ` - ${vendors[selectedIp]}` : '';
+        const displayName = hosts[selectedIp] && hosts[selectedIp] !== selectedIp ? `${hosts[selectedIp]} (${selectedIp})` : selectedIp;
+        subtitle.textContent = `Análise por Serviço - ${displayName}${vendorInfo}`;
+        backButton.classList.remove('hidden');
+        renderDrillDownChart();
+    }
 };
 
-backButton.addEventListener('click', handleDrillUp);
+const fetchHistory = async (range) => {
+    setConnectionStatus('connecting');
+    lastUpdateEl.textContent = `Buscando histórico (${range})...`;
+    try {
+        const response = await fetch(`${API_URL}/api/history?range=${range}`);
+        const data = await response.json();
+        renderHistoryChart(data);
+        setConnectionStatus('disconnected'); // Indica que não está mais em modo 'live'
+        lastUpdateEl.textContent = "Exibindo dados históricos.";
+    } catch (error) {
+        console.error("Erro ao buscar histórico:", error);
+        lastUpdateEl.textContent = "Erro ao buscar histórico.";
+    }
+};
+
+backButton.addEventListener('click', () => {
+    // Se estávamos vendo o histórico, volta para o histórico. Senão, para o ao vivo.
+    const lastLive = document.querySelector('.time-btn[data-range="live"]');
+    if (lastLive.classList.contains('active')) {
+        switchView('live');
+    } else {
+        switchView('history', document.querySelector('.time-btn.active').dataset.range);
+    }
+});
 
 // Funções de Atualização da UI
 const updateStatCards = (traffic) => {
     const ips = Object.keys(traffic);
-    let totalIn = 0;
-    let totalOut = 0;
-
+    let totalIn = 0, totalOut = 0;
     ips.forEach(ip => {
-        Object.values(traffic[ip]).forEach(proto => {
-            totalIn += proto.in || 0;
-            totalOut += proto.out || 0;
+        Object.values(traffic[ip]).forEach(service => {
+            totalIn += service.in || 0;
+            totalOut += service.out || 0;
         });
     });
-
     activeClientsEl.textContent = ips.length;
     totalInboundEl.textContent = formatBytes(totalIn);
     totalOutboundEl.textContent = formatBytes(totalOut);
 };
 
 const updateLastUpdate = () => {
-    lastUpdateEl.textContent = `Última atualização: ${new Date().toLocaleTimeString()}`;
+    lastUpdateEl.textContent = `Última atualização (Ao Vivo): ${new Date().toLocaleTimeString()}`;
 };
 
 const setConnectionStatus = (status) => {
     connectionStatusEl.classList.remove('status-connecting', 'status-connected', 'status-disconnected');
     const statusText = connectionStatusEl.querySelector('.status-text');
-
     if (status === 'connecting') {
         connectionStatusEl.classList.add('status-connecting');
         statusText.textContent = 'Conectando...';
@@ -179,37 +240,33 @@ const setConnectionStatus = (status) => {
         statusText.textContent = 'Conectado';
     } else {
         connectionStatusEl.classList.add('status-disconnected');
-        statusText.textContent = 'Desconectado';
+        statusText.textContent = 'Offline';
     }
 };
 
 // Lógica de Conexão WebSocket
 const connectWebSocket = () => {
     setConnectionStatus('connecting');
-    const socket = new WebSocket(WS_URL);
+    socket = new WebSocket(WS_URL);
 
-    socket.onopen = () => {
-        console.log("Conectado ao servidor.");
-        setConnectionStatus('connected');
-    };
-
+    socket.onopen = () => setConnectionStatus('connected');
+    
     socket.onmessage = (event) => {
         currentTrafficData = JSON.parse(event.data);
-        updateChart();
+        if (currentView === 'live') {
+            renderLiveChart(currentTrafficData);
+        }
         updateStatCards(currentTrafficData.traffic);
         updateLastUpdate();
     };
 
     socket.onclose = () => {
-        console.log("Conexão fechada. Tentando reconectar em 3s...");
         setConnectionStatus('disconnected');
-        setTimeout(connectWebSocket, 3000);
+        if (currentView === 'live') {
+            setTimeout(connectWebSocket, 3000);
+        }
     };
-
-    socket.onerror = (error) => {
-        console.error("Erro WebSocket:", error);
-        socket.close();
-    };
+    socket.onerror = (error) => socket.close();
 };
 
 // Lógica de Tema
@@ -223,8 +280,13 @@ const updateThemeColors = () => {
     trafficChart.options.scales.y.ticks.color = secondaryColor;
     trafficChart.options.scales.y.title.color = secondaryColor;
     trafficChart.options.scales.y.grid.color = gridColor;
-    trafficChart.options.scales.x.ticks.color = secondaryColor;
-    trafficChart.options.scales.x.grid.color = gridColor;
+    if (trafficChart.options.scales.x) {
+        trafficChart.options.scales.x.ticks.color = secondaryColor;
+        trafficChart.options.scales.x.grid.color = gridColor;
+        if (trafficChart.options.scales.x.title) {
+            trafficChart.options.scales.x.title.color = secondaryColor;
+        }
+    }
     trafficChart.options.plugins.legend.labels.color = textColor;
 };
 
@@ -232,7 +294,7 @@ themeToggle.addEventListener('change', () => {
     document.body.classList.toggle('light-mode');
     localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
     updateThemeColors();
-    trafficChart.update();
+    if(trafficChart) trafficChart.update();
 });
 
 const applySavedTheme = () => {
@@ -244,8 +306,17 @@ const applySavedTheme = () => {
 };
 
 // Inicialização
+timeRangeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        timeRangeButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const range = btn.dataset.range;
+        switchView(range === 'live' ? 'live' : 'history', range);
+    });
+});
+
 window.onload = () => {
     applySavedTheme();
     initializeChart();
-    connectWebSocket();
+    switchView('live'); // Inicia na visão ao vivo por padrão
 };
