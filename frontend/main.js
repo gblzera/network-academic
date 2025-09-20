@@ -1,246 +1,251 @@
 // --- CONFIGURAÇÃO ---
-// !!! MUITO IMPORTANTE: Use o IP da sua VM, não localhost ou 127.0.0.1 !!!
 const VM_IP = "192.168.0.140";
 // --- FIM DA CONFIGURAÇÃO ---
 
 const WS_URL = `ws://${VM_IP}:8000/ws`;
 
+// Seletores de Elementos
 const chartCanvas = document.getElementById('traffic-chart').getContext('2d');
 const subtitle = document.getElementById('subtitle');
 const backButton = document.getElementById('back-button');
-const breadcrumb = document.getElementById('breadcrumb');
 const themeToggle = document.getElementById('theme-toggle');
+const connectionStatusEl = document.getElementById('connection-status');
+const activeClientsEl = document.getElementById('active-clients');
+const totalInboundEl = document.getElementById('total-inbound');
+const totalOutboundEl = document.getElementById('total-outbound');
+const lastUpdateEl = document.getElementById('last-update');
 
+// Estado da Aplicação
 let trafficChart;
 let currentTrafficData = {};
 let currentView = 'overview';
 let selectedIp = null;
 let currentIpList = [];
+let inboundGradient, outboundGradient;
 
+// Funções Utilitárias
 const formatBytes = (bytes) => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
-const getDeviceInfo = () => {
-  const parser = new UAParser();
-  const device = parser.getDevice();      // { type, vendor, model }
-  const os = parser.getOS();             // { name, version }
-  // device.type pode ser: “mobile”, “tablet”, “desktop”, undefined, etc.
-  const browser = parser.getBrowser();   // info opcional
-  return {
-    type: device.type || 'desktop',
-    vendor: device.vendor || '',
-    model: device.model || '',
-    osName: os.name || '',
-    osVersion: os.version || '',
-    browserName: browser.name || '',
-    browserVersion: browser.version || ''
-  };
-};
-
+// Funções do Chart
 const initializeChart = () => {
-  trafficChart = new Chart(chartCanvas, {
-    type: 'bar',
-    data: {
-      labels: [],
-      datasets: []
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            callback: (value) => formatBytes(value),
-            color: getCurrentTextColor()
-          },
-          title: {
-            display: true,
-            text: 'Volume de Tráfego',
-            color: getCurrentTextColor()
-          },
-          grid: { color: getCurrentGridColor() }
-        },
-        x: {
-          ticks: { color: getCurrentTextColor() },
-          grid: { color: getCurrentGridColor() }
+    trafficChart = new Chart(chartCanvas, {
+        type: 'bar',
+        data: { labels: [], datasets: [] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { callback: (value) => formatBytes(value), color: '#94a3b8' },
+                    title: { display: true, text: 'Volume de Tráfego', color: '#94a3b8' },
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                },
+                x: {
+                    ticks: { color: '#94a3b8' },
+                    grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                }
+            },
+            plugins: {
+                legend: { position: 'top', labels: { color: '#e2e8f0' } },
+                tooltip: {
+                    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+                    titleFont: { size: 14, weight: 'bold' },
+                    bodyFont: { size: 12 },
+                    callbacks: {
+                        label: (context) => `${context.dataset.label}: ${formatBytes(context.parsed.y)}`
+                    }
+                }
+            },
+            onClick: (event, elements) => {
+                if (currentView === 'overview' && elements.length > 0) {
+                    const rawIp = currentIpList[elements[0].index];
+                    if (rawIp) handleDrillDown(rawIp);
+                }
+            }
         }
-      },
-      plugins: {
-        legend: {
-          labels: { color: getCurrentTextColor() }
-        },
-        tooltip: {
-          callbacks: {
-            label: (context) => `${context.dataset.label}: ${formatBytes(context.parsed.y)}`
-          }
-        }
-      },
-      onClick: (event, elements) => {
-        if (currentView === 'overview' && elements.length > 0) {
-          const clickedIndex = elements[0].index;
-          const rawIp = currentIpList[clickedIndex];
-          if (rawIp) handleDrillDown(rawIp);
-        }
-      }
-    }
-  });
+    });
 };
-
-function getCurrentTextColor() {
-  // Se estiver em dark mode (sem class light-mode), texto branco, senão cor escura
-  return document.body.classList.contains('light-mode')
-    ? getComputedStyle(document.documentElement).getPropertyValue('--secondary-text')
-    : '#ffffff';
-}
-
-function getCurrentGridColor() {
-  return document.body.classList.contains('light-mode')
-    ? 'rgba(0, 0, 0, 0.1)'
-    : 'rgba(255, 255, 255, 0.05)';
-}
 
 const updateChart = () => {
-  if (!trafficChart || !currentTrafficData.traffic) return;
+    if (!trafficChart || !currentTrafficData.traffic) return;
 
-  const traffic = currentTrafficData.traffic;
-  const hosts = currentTrafficData.hosts || {};
-  const hostsDevices = currentTrafficData.hostsDevices || {}; 
-  // supondo que o servidor envie { hostsDevices: { ip: "PC/Desktop" / "Mobile Android"/ etc } }
-  // Se não for enviado, podemos usar um fallback: detectar dispositivo com base no userAgent do cliente do dashboard
+    const traffic = currentTrafficData.traffic;
+    const hosts = currentTrafficData.hosts || {};
 
-  if (currentView === 'overview') {
-    const sortedIps = Object.keys(traffic).sort((a, b) => {
-      const sum = ip => Object.values(traffic[ip]).reduce((acc, proto) => acc + (proto.in || 0) + (proto.out || 0), 0);
-      return sum(b) - sum(a);
-    });
+    // Cria os gradientes para as barras
+    inboundGradient = chartCanvas.createLinearGradient(0, 0, 0, 400);
+    inboundGradient.addColorStop(0, 'rgba(56, 189, 248, 0.8)');
+    inboundGradient.addColorStop(1, 'rgba(56, 189, 248, 0.2)');
 
-    currentIpList = sortedIps;
-    const labels = sortedIps.map(ip => {
-      const hostname = hosts[ip];
-      const deviceInfo = hostsDevices[ip];
-      let deviceSuffix = '';
-      if (deviceInfo) {
-        deviceSuffix = ` — ${deviceInfo}`; 
-      }
-      const displayName = hostname && hostname !== ip ? `${hostname} (${ip})` : ip;
-      return `${displayName}${deviceSuffix}`;
-    });
+    outboundGradient = chartCanvas.createLinearGradient(0, 0, 0, 400);
+    outboundGradient.addColorStop(0, 'rgba(239, 68, 68, 0.8)');
+    outboundGradient.addColorStop(1, 'rgba(239, 68, 68, 0.2)');
 
-    const inboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.in || 0), 0));
-    const outboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.out || 0), 0));
+    if (currentView === 'overview') {
+        const sortedIps = Object.keys(traffic).sort((a, b) => {
+            const sum = ip => Object.values(traffic[ip]).reduce((acc, proto) => acc + (proto.in || 0) + (proto.out || 0), 0);
+            return sum(b) - sum(a);
+        });
 
-    trafficChart.data.labels = labels;
-    trafficChart.data.datasets = [
-      { label: 'Entrada (In)', data: inboundData, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
-      { label: 'Saída (Out)', data: outboundData, backgroundColor: 'rgba(255, 99, 132, 0.7)' }
-    ];
-  } else if (currentView === 'drilldown' && selectedIp) {
-    const protocols = Object.keys(traffic[selectedIp] || {});
-    const inboundData = protocols.map(proto => traffic[selectedIp][proto].in || 0);
-    const outboundData = protocols.map(proto => traffic[selectedIp][proto].out || 0);
+        currentIpList = sortedIps;
+        const labels = sortedIps.map(ip => {
+            const hostname = hosts[ip];
+            return (hostname && hostname !== ip) ? `${hostname} (${ip})` : ip;
+        });
 
-    trafficChart.data.labels = protocols;
-    trafficChart.data.datasets = [
-      { label: 'Entrada (In)', data: inboundData, backgroundColor: 'rgba(54, 162, 235, 0.7)' },
-      { label: 'Saída (Out)', data: outboundData, backgroundColor: 'rgba(255, 99, 132, 0.7)' }
-    ];
-  }
+        const inboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.in || 0), 0));
+        const outboundData = sortedIps.map(ip => Object.values(traffic[ip]).reduce((sum, proto) => sum + (proto.out || 0), 0));
 
-  updateChartColors(); 
-  updateLastUpdate();
-  trafficChart.update();
-};
+        trafficChart.data.labels = labels;
+        trafficChart.data.datasets = [
+            { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
+            { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
+        ];
+    } else if (currentView === 'drilldown' && selectedIp) {
+        const protocols = Object.keys(traffic[selectedIp] || {}).sort();
+        const inboundData = protocols.map(proto => traffic[selectedIp][proto].in || 0);
+        const outboundData = protocols.map(proto => traffic[selectedIp][proto].out || 0);
 
-function updateChartColors() {
-  // Atualiza cores de texto / eixo do gráfico para refletir o tema
-  trafficChart.options.scales.y.ticks.color = getCurrentTextColor();
-  trafficChart.options.scales.y.title.color = getCurrentTextColor();
-  trafficChart.options.scales.y.grid.color = getCurrentGridColor();
+        trafficChart.data.labels = protocols;
+        trafficChart.data.datasets = [
+            { label: 'Entrada (In)', data: inboundData, backgroundColor: inboundGradient, borderRadius: 4 },
+            { label: 'Saída (Out)', data: outboundData, backgroundColor: outboundGradient, borderRadius: 4 }
+        ];
+    }
 
-  trafficChart.options.scales.x.ticks.color = getCurrentTextColor();
-  trafficChart.options.scales.x.grid.color = getCurrentGridColor();
-
-  trafficChart.options.plugins.legend.labels.color = getCurrentTextColor();
-}
-
-const updateLastUpdate = () => {
-  const now = new Date();
-  document.getElementById('last-update').textContent =
-    `Última atualização: ${now.toLocaleTimeString()}`;
+    updateThemeColors();
+    trafficChart.update();
 };
 
 const handleDrillDown = (ip) => {
-  currentView = 'drilldown';
-  selectedIp = ip;
-  const hosts = currentTrafficData.hosts || {};
-  const displayHostname = hosts[ip] && hosts[ip] !== ip ? `${hosts[ip]} (${ip})` : ip;
-  subtitle.textContent = `Análise Detalhada - Cliente: ${displayHostname}`;
-  breadcrumb.textContent = `📁 Detalhes de ${ip}`;
-  backButton.classList.remove('hidden');
-  updateChart();
+    currentView = 'drilldown';
+    selectedIp = ip;
+    const hosts = currentTrafficData.hosts || {};
+    const displayName = hosts[ip] && hosts[ip] !== ip ? `${hosts[ip]} (${ip})` : ip;
+    subtitle.textContent = `Análise Detalhada por Protocolo - ${displayName}`;
+    backButton.classList.remove('hidden');
+    updateChart();
 };
 
 const handleDrillUp = () => {
-  currentView = 'overview';
-  selectedIp = null;
-  subtitle.textContent = 'Visão Geral - Tráfego por Cliente (IP)';
-  breadcrumb.textContent = '📊 Visão Geral';
-  backButton.classList.add('hidden');
-  updateChart();
+    currentView = 'overview';
+    selectedIp = null;
+    subtitle.textContent = 'Visão Geral - Tráfego por Cliente (IP)';
+    backButton.classList.add('hidden');
+    updateChart();
 };
 
 backButton.addEventListener('click', handleDrillUp);
 
+// Funções de Atualização da UI
+const updateStatCards = (traffic) => {
+    const ips = Object.keys(traffic);
+    let totalIn = 0;
+    let totalOut = 0;
+
+    ips.forEach(ip => {
+        Object.values(traffic[ip]).forEach(proto => {
+            totalIn += proto.in || 0;
+            totalOut += proto.out || 0;
+        });
+    });
+
+    activeClientsEl.textContent = ips.length;
+    totalInboundEl.textContent = formatBytes(totalIn);
+    totalOutboundEl.textContent = formatBytes(totalOut);
+};
+
+const updateLastUpdate = () => {
+    lastUpdateEl.textContent = `Última atualização: ${new Date().toLocaleTimeString()}`;
+};
+
+const setConnectionStatus = (status) => {
+    connectionStatusEl.classList.remove('status-connecting', 'status-connected', 'status-disconnected');
+    const statusText = connectionStatusEl.querySelector('.status-text');
+
+    if (status === 'connecting') {
+        connectionStatusEl.classList.add('status-connecting');
+        statusText.textContent = 'Conectando...';
+    } else if (status === 'connected') {
+        connectionStatusEl.classList.add('status-connected');
+        statusText.textContent = 'Conectado';
+    } else {
+        connectionStatusEl.classList.add('status-disconnected');
+        statusText.textContent = 'Desconectado';
+    }
+};
+
+// Lógica de Conexão WebSocket
 const connectWebSocket = () => {
-  console.log("Conectando ao WebSocket...");
-  const socket = new WebSocket(WS_URL);
+    setConnectionStatus('connecting');
+    const socket = new WebSocket(WS_URL);
 
-  socket.onopen = () => console.log("Conectado ao servidor.");
-  socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    // Espera que servidor envie algo como:
-    // {
-    //   traffic: { ... },
-    //   hosts: { ip: hostname, ... },
-    //   hostsDevices: { ip: "Desktop Windows", ip2: "iPhone", ... }
-    // }
-    currentTrafficData = data;
-    updateChart();
-  };
+    socket.onopen = () => {
+        console.log("Conectado ao servidor.");
+        setConnectionStatus('connected');
+    };
 
-  socket.onclose = () => {
-    console.log("Conexão fechada. Tentando reconectar em 2s...");
-    setTimeout(connectWebSocket, 2000);
-  };
+    socket.onmessage = (event) => {
+        currentTrafficData = JSON.parse(event.data);
+        updateChart();
+        updateStatCards(currentTrafficData.traffic);
+        updateLastUpdate();
+    };
 
-  socket.onerror = (error) => {
-    console.error("Erro WebSocket:", error);
-    socket.close();
-  };
+    socket.onclose = () => {
+        console.log("Conexão fechada. Tentando reconectar em 3s...");
+        setConnectionStatus('disconnected');
+        setTimeout(connectWebSocket, 3000);
+    };
+
+    socket.onerror = (error) => {
+        console.error("Erro WebSocket:", error);
+        socket.close();
+    };
+};
+
+// Lógica de Tema
+const updateThemeColors = () => {
+    const isLight = document.body.classList.contains('light-mode');
+    const textColor = isLight ? '#1e293b' : '#e2e8f0';
+    const secondaryColor = isLight ? '#475569' : '#94a3b8';
+    const gridColor = isLight ? 'rgba(0, 0, 0, 0.1)' : 'rgba(255, 255, 255, 0.1)';
+    
+    if (!trafficChart) return;
+    trafficChart.options.scales.y.ticks.color = secondaryColor;
+    trafficChart.options.scales.y.title.color = secondaryColor;
+    trafficChart.options.scales.y.grid.color = gridColor;
+    trafficChart.options.scales.x.ticks.color = secondaryColor;
+    trafficChart.options.scales.x.grid.color = gridColor;
+    trafficChart.options.plugins.legend.labels.color = textColor;
 };
 
 themeToggle.addEventListener('change', () => {
-  document.body.classList.toggle('light-mode');
-  localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
-  // Após mudar tema, atualizar gráfico para aplicar novas cores
-  updateChart();
+    document.body.classList.toggle('light-mode');
+    localStorage.setItem('theme', document.body.classList.contains('light-mode') ? 'light' : 'dark');
+    updateThemeColors();
+    trafficChart.update();
 });
 
-window.addEventListener('DOMContentLoaded', () => {
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme === 'light') {
-    document.body.classList.add('light-mode');
-    themeToggle.checked = true;
-  }
-});
+const applySavedTheme = () => {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'light') {
+        document.body.classList.add('light-mode');
+        themeToggle.checked = true;
+    }
+};
 
+// Inicialização
 window.onload = () => {
-  initializeChart();
-  connectWebSocket();
+    applySavedTheme();
+    initializeChart();
+    connectWebSocket();
 };
